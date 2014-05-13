@@ -8,9 +8,13 @@ import Data.List
 import Diagrams.Prelude
 import Diagrams.TwoD.Text
 import Diagrams.TwoD.Shapes
-import Diagrams.Backend.SVG.CmdLine
-
-
+import Diagrams.Backend.Gtk
+import Diagrams.Backend.Cairo (Cairo)
+import Graphics.UI.Gtk
+import Graphics.UI.Gtk.Gdk.Events
+import Control.Monad.Trans
+import Data.IORef
+import System.Random
 
 type Board = [[Maybe Integer]]
 
@@ -18,9 +22,48 @@ showBoard = unlines . map ( unwords . map (maybe "-" show))
 
 data Direction = Up | Down | Left | Right
 
-main  = mainWith $ (renderBoard initialBoard :: Diagram B R2)
+main = do initGUI
+          win <- windowNew
+          onDestroy win mainQuit
+          canvas <- drawingAreaNew
+          board <- newIORef initialBoard
+          gameOver <- newIORef False
+          canvas `on` sizeRequest $ return (Requisition 512 512)
+          set win [containerBorderWidth := 10, containerChild := canvas]
+          canvas `on` exposeEvent $ liftIO (readIORef board 
+                                   >>= defaultRender canvas . renderBoard)
+                                   >> return True
+          onKeyPress win $ \ (Key _ _ _ _ _ _ _ _ keyName _) -> 
+            liftIO $ do b <- readIORef board
+                        n <- randomRIO (1,5)
+                        isGameOver <- readIORef gameOver
+                        let b' = processEvent keyName n b
+                        if isGameOver
+                        then return ()
+                        else
+                          if isLosing b'
+                            then defaultRender canvas (scale 20 $ text "You Lose!") 
+                                 >> writeIORef gameOver True
+                                 >> return ()
+                            else if isWinning b'
+                              then defaultRender canvas (scale 20 $ text "You Win!")
+                                   >> writeIORef gameOver True
+                                   >> return ()
+                              else defaultRender canvas (renderBoard  b') 
+                                   >>  writeIORef board b'
+                                   >> return ()
+                        return True
+          widgetShowAll win
+          mainGUI
 
-initialBoard = addOne
+processEvent "Up" n = addOne n . collapseDirection Up 
+processEvent "Down" n = addOne n . collapseDirection Down  
+processEvent "Left" n = addOne n . collapseDirection Left
+processEvent "Right" n = addOne n . collapseDirection Right
+processEvent _ _ = id
+
+
+initialBoard = addOne 1
   [[Nothing, Nothing, Nothing, Nothing, Nothing]
   ,[Nothing, Nothing, Nothing, Nothing, Nothing]
   ,[Nothing, Nothing, Nothing, Nothing, Nothing]
@@ -28,15 +71,15 @@ initialBoard = addOne
   ,[Nothing, Nothing, Nothing, Nothing, Nothing]
   ]
 
-addOne :: Board -> Board
-addOne [as, bs, cs, ds, Nothing:es] = [as, bs, cs, ds, Just 1:es]
-addOne xs = xs
+addOne :: Integer -> Board -> Board
+addOne n [as, bs, cs, ds, Nothing:es] = [as, bs, cs, ds, Just n:es]
+addOne n xs = xs
 
 isLosing :: Board -> Bool
 --sees whether all of the intersections on the board are occupied
 --catMaybes throws away all of the nothings, then we see if the length of the resulting list is 4. Then, and together all of the booleans 
 --to see whether all of the columns are full. If they are, you lose.
-isLosing = and . map ((== 4) . length . catMaybes)
+isLosing b = or (map (or . map (> 500) . catMaybes)  b) || and (map ((== 4) . length . catMaybes) b)
 
 isWinning :: Board -> Bool
 --see whether anything on the board is equal to one hundreds.
@@ -82,7 +125,8 @@ collapseLine (x : xs) = go $ collapseLine xs
 horizontally = foldl' (|||) mempty
 vertically = foldl' (===) mempty
 
-renderBox Nothing = square 2
-renderBox (Just x) = square 2 `atop` text (show x)
+renderBox Nothing = square 10
+renderBox (Just x) = square 10 `atop` (scale 5 $ text (' ':show x)) -- bug: rendering a single character fails on OSX
 
 renderBoard = vertically . map (horizontally . map renderBox)
+
